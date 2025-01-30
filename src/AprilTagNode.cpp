@@ -63,6 +63,11 @@ public:
     ~AprilTagNode() override;
 
 private:
+    void onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img, const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci);
+
+    rcl_interfaces::msg::SetParametersResult onParameter(const std::vector<rclcpp::Parameter>& parameters);
+
+private:
     const OnSetParametersCallbackHandle::SharedPtr cb_parameter;
 
     apriltag_family_t* tf;
@@ -80,13 +85,9 @@ private:
 
     const image_transport::CameraSubscriber sub_cam;
     const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
-    tf2_ros::TransformBroadcaster tf_broadcaster;
+    rclcpp::Publisher<geometry_msgs::msg::TransformStamped>::SharedPtr pub_transform;
 
     pose_estimation_f estimate_pose = nullptr;
-
-    void onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img, const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci);
-
-    rcl_interfaces::msg::SetParametersResult onParameter(const std::vector<rclcpp::Parameter>& parameters);
 };
 
 RCLCPP_COMPONENTS_REGISTER_NODE(AprilTagNode)
@@ -105,7 +106,7 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
         declare_parameter("image_transport", "raw", descr({}, true)),
         rmw_qos_profile_sensor_data)),
     pub_detections(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
-    tf_broadcaster(this)
+    pub_transform(create_publisher<geometry_msgs::msg::TransformStamped> ("transforms", rclcpp::QoS(1).reliable().durability_best_available()))
 {
     // read-only parameters
     const std::string tag_family = declare_parameter("family", "36h11", descr("tag family", true));
@@ -155,6 +156,13 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
     }
 }
 
+std::string extractCameraName (const std::string &fullFrameId) {
+    auto pos = fullFrameId.rfind("/");
+    if (pos == std::string::npos)
+        return fullFrameId;
+    return fullFrameId.substr(pos + 1);
+}
+
 AprilTagNode::~AprilTagNode()
 {
     apriltag_detector_destroy(td);
@@ -164,6 +172,7 @@ AprilTagNode::~AprilTagNode()
 void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img,
                             const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci)
 {
+    using namespace std;
     // camera intrinsics for rectified images
     const std::array<double, 4> intrinsics = {msg_ci->p.data()[0], msg_ci->p.data()[5], msg_ci->p.data()[2], msg_ci->p.data()[6]};
 
@@ -198,7 +207,10 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         if(!tag_frames.empty() && !tag_frames.count(det->id)) { continue; }
 
         // reject detections with more corrected bits than allowed
-        if(det->hamming > max_hamming) { continue; }
+        if(det->hamming > max_hamming) {
+            std::cout << "Hamming: " << det->hamming << std::endl;
+            continue;
+        }
 
         // detection
         apriltag_msgs::msg::AprilTagDetection msg_detection;
@@ -215,18 +227,21 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         // 3D orientation and position
         geometry_msgs::msg::TransformStamped tf;
         tf.header = msg_img->header;
-        // set child frame name by generic tag name or configured tag name
-        tf.child_frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
+        tf.header.stamp = get_clock()->now();
+        tf.header.frame_id =  extractCameraName (tf.header.frame_id);
+        // set base frame name by generic tag name or configured tag name
+        tf.child_frame_id            = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + "_" + std::to_string(det->id) + "_VCS";
         const double size = tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size;
         if(estimate_pose != nullptr) {
             tf.transform = estimate_pose(det, intrinsics, size);
         }
-
+        cout << tf.transform.translation.x << endl;
         tfs.push_back(tf);
     }
-
     pub_detections->publish(msg_detections);
-    tf_broadcaster.sendTransform(tfs);
+
+    for (const geometry_msgs::msg::TransformStamped &transform : tfs)
+        pub_transform->publish(transform);
 
     apriltag_detections_destroy(detections);
 }

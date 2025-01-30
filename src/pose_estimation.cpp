@@ -2,6 +2,7 @@
 #include <Eigen/Geometry>
 #include <apriltag/apriltag_pose.h>
 #include <apriltag/common/homography.h>
+#include <iostream>
 #include <opencv2/calib3d.hpp>
 #include <tf2/convert.h>
 
@@ -50,7 +51,6 @@ pnp(apriltag_detection_t* const detection, const std::array<double, 4>& intr, do
 
     cv::Mat rvec, tvec;
     cv::solvePnP(objectPoints, imagePoints, cameraMatrix, {}, rvec, tvec);
-
     return tf2::toMsg<std::pair<cv::Mat_<double>, cv::Mat_<double>>, geometry_msgs::msg::Transform>(std::make_pair(tvec, rvec));
 }
 
