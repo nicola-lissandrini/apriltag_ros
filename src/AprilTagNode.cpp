@@ -172,6 +172,7 @@ AprilTagNode::~AprilTagNode()
 void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img,
                             const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci)
 {
+    using namespace std;
     // camera intrinsics for rectified images
     const std::array<double, 4> intrinsics = {msg_ci->p.data()[0], msg_ci->p.data()[5], msg_ci->p.data()[2], msg_ci->p.data()[6]};
 
@@ -234,10 +235,9 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         if(estimate_pose != nullptr) {
             tf.transform = estimate_pose(det, intrinsics, size);
         }
-
+        cout << tf.transform.translation.x << endl;
         tfs.push_back(tf);
     }
-
     pub_detections->publish(msg_detections);
 
     for (const geometry_msgs::msg::TransformStamped &transform : tfs)
